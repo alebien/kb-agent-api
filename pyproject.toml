@@ -13,5 +13,9 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
 # 与 black 风格一致，团队协作时不会来回改格式
 quote-style = "double"
 
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+
 [project]
 requires-python = ">=3.11"

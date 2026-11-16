@@ -20,8 +20,9 @@ router = APIRouter()
 # 心跳间隔：空闲超过它就补一个注释行，避免网关把长连接当死连接掐掉
 HEARTBEAT_INTERVAL_MS = 1200
 
-# 断流模拟位置：scenario=broken 时在这个比例的片数处中断，用来验 error 事件
-BROKEN_AT_RATIO = 0.4
+# 断流模拟位置：scenario=broken 时收到这么多片后中断，用来验 error 事件
+# 用固定片数而不是比例：调试开关的行为要可预测，不随上游实际片数漂移
+BROKEN_AFTER_CHUNKS = 20
 
 # 占位引用：D7 还没有检索，先给一条固定来源把事件顺序跑通，D8 换成 BM25 真实命中
 PLACEHOLDER_CITATION = {
@@ -114,7 +115,7 @@ async def chat(request: Request) -> StreamingResponse:
             # 断流阈值：-1 表示不中断
             broken_at = -1
             if broken:
-                broken_at = max(1, int(10 * BROKEN_AT_RATIO))
+                broken_at = BROKEN_AFTER_CHUNKS
 
             async for piece in stream_completion(prompt, result):
                 if result.chunk_count == broken_at:

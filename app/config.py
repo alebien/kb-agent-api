@@ -10,6 +10,8 @@ load_dotenv()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+# 思考模式开关：disabled 首字更快更省，enabled 适合多条件推理；D16 用评测集对比后再定默认值
+DEEPSEEK_THINKING = os.getenv("DEEPSEEK_THINKING", "disabled")
 
 
 def require_api_key() -> str:

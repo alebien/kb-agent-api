@@ -1,0 +1,25 @@
+{
+  // 后端专用配置：只管 Python，不碰前端的 ESLint / Prettier / oxlint
+  // 语言相关设置一律写在 "[python]" 段里，避免影响其他语言文件
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports.ruff": "explicit",
+      "source.fixAll.ruff": "explicit"
+    }
+  },
+
+  // 新开集成终端时自动激活 .venv，省去每次写全路径
+  "python.terminal.activateEnvironment": true,
+
+  // standard 足够：能查类型错，又不至于对第三方库报一堆噪音
+  "python.analysis.typeCheckingMode": "standard",
+
+  // 后端不需要看这些目录
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/*.pyc": true
+  }
+}

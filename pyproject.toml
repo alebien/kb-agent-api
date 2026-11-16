@@ -1,0 +1,17 @@
+[tool.ruff]
+# 行宽与前端保持一致，便于两边对照阅读
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/F 基础错误，I 导入排序，UP 现代写法，B 易错模式
+# ASYNC 专抓「async 函数里调用阻塞函数」：ASYNC251 阻塞 sleep、ASYNC210 阻塞 HTTP、ASYNC230 同步读文件
+# SIM 抓可简化的写法，避免代码越写越绕
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+
+[tool.ruff.format]
+# 与 black 风格一致，团队协作时不会来回改格式
+quote-style = "double"
+
+[project]
+requires-python = ">=3.11"

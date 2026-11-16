@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.config import DEEPSEEK_MODEL
 from app.llm.deepseek import StreamResult, UpstreamError, stream_completion
@@ -16,6 +17,16 @@ from app.sse import sse_comment, sse_event
 logger = logging.getLogger("knoagent.chat")
 
 router = APIRouter()
+
+
+class ChatRequest(BaseModel):
+    """对话请求体：字段校验交给 Pydantic，非法输入自动 422 且带字段级说明"""
+
+    # 对应 PRD FR-3-1「单条提问不超过 2000 字」，此前只在输入框限制，直连接口可绕过
+    prompt: str = Field(min_length=1, max_length=2000, description="用户提问")
+    # 前端上屏用的临时 id，仅用于日志回显与幂等键，真实后端不依赖它
+    answerId: str | None = Field(default=None, max_length=128, description="前端临时消息 id")
+
 
 # 心跳间隔：空闲超过它就补一个注释行，避免网关把长连接当死连接掐掉
 HEARTBEAT_INTERVAL_MS = 1200
@@ -37,10 +48,10 @@ PLACEHOLDER_CITATION = {
 
 
 @router.post("/api/chat")
-async def chat(request: Request) -> StreamingResponse:
+async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
     """接收提问并流式返回回答，事件顺序 start → tool → citation → tool → delta×N → done"""
-    body = await request.json()
-    prompt = str(body.get("prompt", "")).strip()
+    # 校验已由 Pydantic 完成，这里只去掉首尾空白；纯空白按空提问处理
+    prompt = payload.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt 不能为空")
 

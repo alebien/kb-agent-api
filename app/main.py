@@ -2,15 +2,15 @@
 
 import logging
 
-from fastapi import FastAPI  # 导入
+from fastapi import FastAPI
 
-from app.api.chat import router as chat_router  # 新增：导入路由
+from app.api.chat import router as chat_router
 
 # 没有这句，自己的 logger.info 会被丢弃：uvicorn 只配置它自己的 logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="KnoAgent API")  # 调用
-app.include_router(chat_router)  # 新增：挂载
+app = FastAPI(title="KnoAgent API")
+app.include_router(chat_router)
 
 
 @app.get("/health")  # 装饰器 将下面的函数“注册”到目标路由上

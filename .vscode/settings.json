@@ -21,5 +21,6 @@
     "**/__pycache__": true,
     "**/.pytest_cache": true,
     "**/*.pyc": true
-  }
+  },
+  "python.terminal.useEnvFile": true
 }

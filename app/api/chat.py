@@ -1,4 +1,4 @@
-"""对话流式接口：上午用固定文案验证事件契约与字节流，下午换成真模型"""
+"""对话流式接口：把上游模型的增量转成契约里的 6 个事件"""
 
 import asyncio
 import logging
@@ -9,47 +9,44 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.config import DEEPSEEK_MODEL
+from app.llm.deepseek import StreamResult, UpstreamError, stream_completion
 from app.sse import sse_comment, sse_event
 
 logger = logging.getLogger("knoagent.chat")
 
 router = APIRouter()
 
-FIXED_ANSWER = """## 发票处理建议
-
-已为你检索到发票相关规则，可以先按下面步骤确认：
-
-1. 核对开票主体与税号是否正确
-2. 电子普票在开具后 **30 天内** 可申请换开
-3. 跨月换开需要先红冲原发票
-
-> 如果订单已报销，请先确认财务是否接受红冲后的新票
-"""
-
-CHUNK_SIZE = 3
-CHUNK_INTERVAL_MS = 30
+# 心跳间隔：空闲超过它就补一个注释行，避免网关把长连接当死连接掐掉
 HEARTBEAT_INTERVAL_MS = 1200
 
+# 断流模拟位置：scenario=broken 时在这个比例的片数处中断，用来验 error 事件
+BROKEN_AT_RATIO = 0.4
 
-def normalize_chunk_size(raw: str | None) -> int:
-    """解析 ?chunkSize=N，非数字回落到默认值；调试面板靠它切换颗粒度"""
-    try:
-        value = int(raw) if raw is not None else CHUNK_SIZE
-    except ValueError:
-        return CHUNK_SIZE
-    return max(1, min(40, value))
+# 占位引用：D7 还没有检索，先给一条固定来源把事件顺序跑通，D8 换成 BM25 真实命中
+PLACEHOLDER_CITATION = {
+    "documentId": "4b7d2f58-1c9e-4a63-b840-7e5f9a2c6d13",
+    "knowledgeBaseId": "kb_invoice",
+    "name": "发票开具流程说明.docx",
+    "description": "财务票据库 · 抬头换开与时效",
+    "snippet": "电子普通发票开具后 30 天内可申请换开，跨月换开需先完成红冲",
+    "page": 6,
+    "score": 0.84,
+}
 
 
 @router.post("/api/chat")
 async def chat(request: Request) -> StreamingResponse:
-    """接收提问并流式返回回答，事件顺序 start → delta×N → done"""
+    """接收提问并流式返回回答，事件顺序 start → tool → citation → tool → delta×N → done"""
     body = await request.json()
     prompt = str(body.get("prompt", "")).strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt 不能为空")
 
-    chunk_size = normalize_chunk_size(request.query_params.get("chunkSize"))
+    # 调试开关：前端 SSE 调试面板用它模拟断流，生产环境不会传
+    broken = request.query_params.get("scenario") == "broken"
     started_at = datetime.now(UTC)
+    # 每次请求独立 id：时间戳只到秒，同秒并发会撞，补 4 位随机后缀
     answer_id = f"srv-{int(started_at.timestamp())}-{secrets.token_hex(2)}"
 
     async def stream():
@@ -60,24 +57,73 @@ async def chat(request: Request) -> StreamingResponse:
         # 上一次发心跳的时间点，毫秒
         last_ping_at = time.monotonic() * 1000
         # 是否已把 done 交出去：前端收到 done 会立刻 cancel 连接
-        # 靠它区分「正常收尾」与「中途断开」
+        # 靠它区分「正常收尾」与「中途断开」，否则每次成功请求都会打一条断开日志
         sent_done = False
+        # 承接上游统计：模型名、token 数、片数，生成器结束后才可读
+        result = StreamResult()
 
         try:
             yield sse_event(
                 "start",
                 {
                     "answerId": answer_id,
-                    "model": "kb-agent-fixed",
+                    "model": DEEPSEEK_MODEL,
                     "createdAt": started_at.isoformat(),
                 },
                 seq,
             )
 
-            # 按 chunk_size 切片，模拟模型一次 flush 携带的字符数
-            for index in range(0, len(FIXED_ANSWER), chunk_size):
+            # 检索占位：先发 running，把首字到达前的一两秒空档变成可见的「正在检索」
+            tool_id = f"{answer_id}-search"
+            search_started = time.monotonic()
+            seq += 1
+            yield sse_event(
+                "tool",
+                {
+                    "id": tool_id,
+                    "name": "search_knowledge",
+                    "status": "running",
+                    "arguments": {"query": prompt, "top_k": 5},
+                    "startAt": datetime.now(UTC).isoformat(),
+                },
+                seq,
+            )
+
+            # D8 换成真实 BM25 检索：届时 citation 由检索结果生成，这里只留占位
+            seq += 1
+            yield sse_event(
+                "citation", {"id": f"{answer_id}-citation", **PLACEHOLDER_CITATION}, seq
+            )
+
+            # 工具结束必须与 running 用同一个 id，前端按 id 覆盖同一张卡片
+            search_duration_ms = int((time.monotonic() - search_started) * 1000)
+            seq += 1
+            yield sse_event(
+                "tool",
+                {
+                    "id": tool_id,
+                    "name": "search_knowledge",
+                    "status": "success",
+                    "arguments": {"query": prompt, "top_k": 5},
+                    "result": {"hits": 1, "topScore": PLACEHOLDER_CITATION["score"]},
+                    "durationMs": search_duration_ms,
+                },
+                seq,
+            )
+
+            # 断流阈值：-1 表示不中断
+            broken_at = -1
+            if broken:
+                broken_at = max(1, int(10 * BROKEN_AT_RATIO))
+
+            async for piece in stream_completion(prompt, result):
+                if result.chunk_count == broken_at:
+                    # 模拟上游中途失败：走 error 事件而不是断连，前端才能显示原因
+                    seq += 1
+                    yield sse_event("error", {"message": "模型服务响应超时"}, seq)
+                    return
+
                 seq += 1
-                piece = FIXED_ANSWER[index : index + chunk_size]
                 sent_chars += len(piece)
                 yield sse_event("delta", {"text": piece}, seq)
 
@@ -87,8 +133,6 @@ async def chat(request: Request) -> StreamingResponse:
                     last_ping_at = now_ms
                     yield sse_comment(f"ping {int(now_ms)}")
 
-                await asyncio.sleep(CHUNK_INTERVAL_MS / 1000)
-
             seq += 1
             duration_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
             # 先置标记再吐 done：客户端很可能在收到 done 的同一次读取里就断开
@@ -97,35 +141,44 @@ async def chat(request: Request) -> StreamingResponse:
                 "done",
                 {
                     "confidence": 88,
-                    "model": "kb-agent-fixed",
+                    "model": result.model or DEEPSEEK_MODEL,
                     "durationMs": duration_ms,
-                    "tokens": len(FIXED_ANSWER),
+                    "tokens": result.completion_tokens,
                 },
                 seq,
             )
             logger.info(
-                "回答正常结束 answerId=%s 事件=%d 字符=%d 耗时=%dms",
+                "回答正常结束 answerId=%s 事件=%d 字符=%d 片数=%d tokens=%d usage=%s 耗时=%dms",
                 answer_id,
                 seq,
                 sent_chars,
+                result.chunk_count,
+                result.completion_tokens,
+                result.usage_received,
                 duration_ms,
             )
+
         except asyncio.CancelledError:
             # 客户端关连接时，Starlette 会取消这个生成器任务，抛的就是它
             if sent_done:
                 logger.info("正常结束（done 后客户端关闭连接）answerId=%s 事件=%d", answer_id, seq)
             else:
                 logger.warning(
-                    "客户端断开 answerId=%s 已发事件=%d 已发字符=%d/%d",
+                    "客户端断开 answerId=%s 已发事件=%d 已发字符=%d",
                     answer_id,
                     seq,
                     sent_chars,
-                    len(FIXED_ANSWER),
                 )
             # 必须重新抛出，否则取消信号被吞，uvicorn 会认为任务正常结束
             raise
 
+        except UpstreamError as exc:
+            # 上游错误（401、余额不足、超时）属于流内失败，只能发事件，改不了状态码
+            logger.warning("上游失败 answerId=%s 原因=%s", answer_id, exc)
+            yield sse_event("error", {"message": f"模型服务暂不可用：{exc}"}, seq + 1)
+
         except Exception:
+            # 兜底：任何未预期异常都要变成 error 事件，否则前端只看到断连、拿不到原因
             logger.exception("生成失败 answerId=%s 事件=%d", answer_id, seq)
             yield sse_event("error", {"message": "生成失败，请稍后重试"}, seq + 1)
 

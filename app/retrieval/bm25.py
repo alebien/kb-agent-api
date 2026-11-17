@@ -109,18 +109,30 @@ def _load_chunks(documents: dict[str, dict]) -> list[dict]:
     """
     chunk_list: list[dict] = []
     skipped = 0
+    # 清单里查不到的 doc_id 集合：块照旧保留，但必须留下痕迹
+    # 丢了语料是无声故障，搜不到也不报错；多一条引用反而容易发现，所以默认保留
+    orphan_doc_ids: set[str] = set()
     with CHUNKS_PATH.open(encoding="utf-8") as fh:
         for line in fh:
             if not line.strip():
                 continue
             chunk = json.loads(line)
             doc = documents.get(chunk["doc_id"])
-            # deleted_at 非空即整篇下线；清单里查不到的块保留，避免清单漏写导致静默丢语料
-            if doc and doc.get("deleted_at"):
+            # 清单缺失时不做下线判断，避免清单漏写把整篇语料静默丢掉
+            if doc is None:
+                orphan_doc_ids.add(chunk["doc_id"])
+            # deleted_at 非空即整篇下线
+            elif doc.get("deleted_at"):
                 skipped += 1
                 continue
             chunk_list.append(chunk)
     logger.info("块加载完成 可用=%d 剔除=%d", len(chunk_list), skipped)
+    # 对账：清单与块文件不同步时要能立刻看出来，否则只能等某个问题莫名答不上来才发现
+    if orphan_doc_ids:
+        logger.warning(
+            "清单缺少这些文档，块已保留但无法判断是否下线 doc_id=%s",
+            sorted(orphan_doc_ids),
+        )
     return chunk_list
 
 
@@ -155,8 +167,38 @@ def warmup() -> None:
     _get_index()
 
 
-def _to_citation(chunk: dict, ratio: float, query_terms: set[str]) -> dict:
-    """把块转成契约形状的引用项，score 取相对最高分的比例，便于前端直接展示"""
+def _confidence(matched: set[str], query_terms: set[str], idf: dict[str, float]) -> float:
+    """按 IDF 加权的命中比例，作为给用户看的可信度
+
+    单纯数命中词数会失真：命中「发票」「抬头」和命中两个虚词，分量完全不同
+    所以用词的信息量加权——稀有词命中才真正抬分，常见词几乎不动
+    """
+    # BM25Okapi 会把出现在过半文档里的词的 IDF 压成极小负值，直接求和会抵消，取绝对值只看量级
+    total = sum(abs(idf.get(term, 0.0)) for term in query_terms)
+    if total <= 0:
+        # 语料里一个带权重的词都没有，退回纯覆盖率，避免除零
+        return len(matched & query_terms) / len(query_terms)
+    hit = sum(abs(idf.get(term, 0.0)) for term in query_terms & matched)
+    return hit / total
+
+
+# 单词查询的可信度上限
+# 只有一个查询词时，覆盖率非 0 即 1，指标退化成布尔值；直接给 1.0 会让用户以为满分命中
+# 封顶到 0.7 表达「知道你要这个主题，但不确定哪一段最贴题」
+SINGLE_TERM_CONFIDENCE_CAP = 0.7
+# 可信度总上限：任何情况下都不报 1.000
+# 检索是概率判断，给用户看「100% 可信」是不诚实，留一线表达不确定性
+CONFIDENCE_CEILING = 0.95
+
+
+def _to_citation(
+    chunk: dict, ratio: float, query_terms: set[str], confidence: float
+) -> dict:
+    """把块转成契约形状的引用项
+
+    score 是相对最高分的比例，只用于排序比较，第一名恒为 1.000；
+    confidence 是按 IDF 加权的命中比例，表示「这个块到底有多贴题」，给前端展示用
+    """
     text = chunk["text"].replace("\n", " ").strip()
     # 块首常是 80 字重叠切下来的半句，直接截前 120 字会给用户看断句
     # 所以以命中词为中心开窗：找不到命中词才退回从块首截
@@ -182,6 +224,8 @@ def _to_citation(chunk: dict, ratio: float, query_terms: set[str]) -> dict:
         "snippet": snippet,
         "page": chunk["page"],
         "score": round(ratio, 3),
+        # 展示用的可信度，与 score 语义不同：score 是相对排序值，confidence 是贴题程度
+        "confidence": round(confidence, 3),
     }
 
 
@@ -216,18 +260,31 @@ def search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
         return []
 
     floor = top_score * RELATIVE_THRESHOLD
+    # BM25Okapi 内部的词到 IDF 映射，算可信度直接用，不必自己再统计一遍
+    idf: dict[str, float] = getattr(index.bm25, "idf", {})
     hits: list[dict] = []
     for chunk, score in ranked:
         # ranked 已按分数降序，一旦跌破门槛，后面的只会更低
         if float(score) < floor:
             break
-        if (
-            len(query_terms & set(_tokenize(chunk["heading"] + " " + chunk["text"])))
-            / len(query_terms)
-            < MIN_COVERAGE
-        ):
+        # 块的分词只算一次，覆盖率和可信度共用，别在循环里切两遍
+        chunk_terms = set(_tokenize(chunk["heading"] + " " + chunk["text"]))
+        if len(query_terms & chunk_terms) / len(query_terms) < MIN_COVERAGE:
             continue
-        hits.append(_to_citation(chunk, float(score) / top_score, query_terms))
+        hits.append(
+            _to_citation(
+                chunk,
+                float(score) / top_score,
+                query_terms,
+                _confidence(query_terms & chunk_terms, query_terms, idf)
+                # 单词查询封顶并按分数比例拉开：全是 1.0 无意义，全归 0 又等于说不可信
+                * (
+                    SINGLE_TERM_CONFIDENCE_CAP * float(score) / top_score
+                    if len(query_terms) == 1
+                    else CONFIDENCE_CEILING
+                ),
+            )
+        )
         if len(hits) >= top_k:
             break
     return hits

@@ -1,15 +1,26 @@
 """KnoAgent 后端入口：只负责建应用，后续再挂路由与中间件"""
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.api.chat import router as chat_router
+from app.retrieval.bm25 import warmup
 
 # 没有这句，自己的 logger.info 会被丢弃：uvicorn 只配置它自己的 logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="KnoAgent API")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """启动时预热词典与索引：jieba 首次加载词典约 0.5 秒，不预热会算进首次提问的首字延迟"""
+    warmup()
+    yield
+
+
+app = FastAPI(title="KnoAgent API", lifespan=lifespan)
 app.include_router(chat_router)
 
 

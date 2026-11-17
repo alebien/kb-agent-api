@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.config import DEEPSEEK_MODEL
 from app.llm.deepseek import StreamResult, UpstreamError, stream_completion
+from app.retrieval.bm25 import search
 from app.sse import sse_comment, sse_event
 
 logger = logging.getLogger("knoagent.chat")
@@ -34,17 +35,6 @@ HEARTBEAT_INTERVAL_MS = 1200
 # 断流模拟位置：scenario=broken 时收到这么多片后中断，用来验 error 事件
 # 用固定片数而不是比例：调试开关的行为要可预测，不随上游实际片数漂移
 BROKEN_AFTER_CHUNKS = 20
-
-# 占位引用：D7 还没有检索，先给一条固定来源把事件顺序跑通，D8 换成 BM25 真实命中
-PLACEHOLDER_CITATION = {
-    "documentId": "4b7d2f58-1c9e-4a63-b840-7e5f9a2c6d13",
-    "knowledgeBaseId": "kb_invoice",
-    "name": "发票开具流程说明.docx",
-    "description": "财务票据库 · 抬头换开与时效",
-    "snippet": "电子普通发票开具后 30 天内可申请换开，跨月换开需先完成红冲",
-    "page": 6,
-    "score": 0.84,
-}
 
 
 @router.post("/api/chat")
@@ -101,14 +91,20 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
                 seq,
             )
 
-            # D8 换成真实 BM25 检索：届时 citation 由检索结果生成，这里只留占位
-            seq += 1
-            yield sse_event(
-                "citation", {"id": f"{answer_id}-citation", **PLACEHOLDER_CITATION}, seq
-            )
+            # 真实检索：BM25 召回，命中几条发几条 citation
+            # 契约硬口径：citation 必须全部早于第一个 delta，否则前端没法先把来源卡片挂上去
+            citations = search(prompt)
+            # 检索耗时只算 search 本身，单位毫秒，D9 前端第四行质量行要用
+            # 语料只有 16 块，检索常在 1ms 内完成，实测为 0 时兜底成 1，避免前端把 0 读成「未测量」
+            retrieval_ms = max(1, int((time.monotonic() - search_started) * 1000))
+            for item in citations:
+                # 块 id 只保证块内唯一，加上 answerId 前缀避免跨请求撞 id
+                chunk_id = item["id"]
+                payload = {key: value for key, value in item.items() if key != "id"}
+                seq += 1
+                yield sse_event("citation", {"id": f"{answer_id}-{chunk_id}", **payload}, seq)
 
             # 工具结束必须与 running 用同一个 id，前端按 id 覆盖同一张卡片
-            search_duration_ms = int((time.monotonic() - search_started) * 1000)
             seq += 1
             yield sse_event(
                 "tool",
@@ -117,8 +113,12 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
                     "name": "search_knowledge",
                     "status": "success",
                     "arguments": {"query": prompt, "top_k": 5},
-                    "result": {"hits": 1, "topScore": PLACEHOLDER_CITATION["score"]},
-                    "durationMs": search_duration_ms,
+                    "result": {
+                        "hits": len(citations),
+                        # 零命中时没有最高分，给 0 而不是 null，前端按数字处理
+                        "topScore": citations[0]["score"] if citations else 0,
+                    },
+                    "durationMs": retrieval_ms,
                 },
                 seq,
             )
@@ -156,6 +156,8 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
                     "model": result.model or DEEPSEEK_MODEL,
                     "durationMs": duration_ms,
                     "tokens": result.completion_tokens,
+                    # 质量行四步链路的第二段：检索耗时，D9 前端加「检索」那一行时要读
+                    "breakdown": {"retrievalMs": retrieval_ms},
                 },
                 seq,
             )

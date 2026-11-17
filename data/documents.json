@@ -1,0 +1,58 @@
+[
+  {
+    "doc_id": "9f2c4e1a-7b3d-4c8f-a1e6-2d5b8c0f4a71",
+    "name": "售后退款政策_v2.pdf",
+    "knowledge_base_id": "kb_aftersale",
+    "description": "售后政策库 · 退款时效与无理由判定",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "4b7d2f58-1c9e-4a63-b840-7e5f9a2c6d13",
+    "name": "发票开具流程说明.docx",
+    "knowledge_base_id": "kb_invoice",
+    "description": "财务票据库 · 抬头换开与时效",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "c3a8e6d2-5f47-4b91-9d08-1a6c3e7f2b95",
+    "name": "会员等级权益对比表.md",
+    "knowledge_base_id": "kb_member",
+    "description": "会员权益库 · 等级折扣与权益边界",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "8b4f7e21-c09d-4a6b-9e35-2d1a5c8b7f60",
+    "name": "会员积分规则说明.docx",
+    "knowledge_base_id": "kb_member",
+    "description": "会员权益库 · 积分获取与过期",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "1f7e3a58-9c2b-4d81-b640-8a5e0f2c9d34",
+    "name": "票据作废与红冲流程.pdf",
+    "knowledge_base_id": "kb_invoice",
+    "description": "财务票据库 · 作废红冲与退款联动",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "6c0d9b47-3e5a-4f28-8a71-b2d4c6e9f013",
+    "name": "配送时效与区域覆盖说明.md",
+    "knowledge_base_id": "kb_logistics",
+    "description": "物流配送库 · 时效与区域覆盖",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "b4c1d7e9-2a58-4f63-9b07-8e3d1c5a2f84",
+    "name": "售后退款政策_v1_已废止.pdf",
+    "knowledge_base_id": "kb_aftersale",
+    "description": "售后政策库 · 旧版退款政策（已废止）",
+    "status": "ready",
+    "deleted_at": "2026-11-06T11:20:00+08:00"
+  }
+]

@@ -1,0 +1,248 @@
+"""BM25 检索层：切词、打分、召回知识块，并过滤已下线文档"""
+
+import json
+import logging
+import threading
+from pathlib import Path
+
+import jieba
+from rank_bm25 import BM25Okapi
+
+logger = logging.getLogger("knoagent.retrieval")
+
+# 仓库根目录：本文件位于 app/retrieval/bm25.py，向上三级即 kb-agent-api/
+BASE_DIR = Path(__file__).resolve().parents[2]
+# 语料与清单的固定位置，写死绝对路径会让换机器、换启动目录就失效
+DATA_DIR = BASE_DIR / "data"
+CHUNKS_PATH = DATA_DIR / "chunks.jsonl"
+DOCUMENTS_PATH = DATA_DIR / "documents.json"
+USERDICT_PATH = DATA_DIR / "userdict.txt"
+
+# 引用片段长度：前端卡片只展示开头，过长会把布局挤变形
+SNIPPET_LEN = 120
+# 相对门槛：低于最高分这个比例的命中一律丢弃
+# 语料只有十几块，BM25 原始分无上界且随查询长度漂移，绝对阈值（如 0.60）调不出来
+RELATIVE_THRESHOLD = 0.4
+# 默认召回条数，与前端契约里的 top_k 对齐
+DEFAULT_TOP_K = 5
+MIN_COVERAGE = 0.5
+STOPWORDS = frozenset(
+    [
+        "的",
+        "了",
+        "吗",
+        "呢",
+        "吧",
+        "啊",
+        "呀",
+        "是",
+        "能",
+        "可以",
+        "怎么",
+        "怎样",
+        "什么",
+        "你们",
+        "我们",
+        "他们",
+        "请问",
+        "一下",
+        "这个",
+        "那个",
+        "在",
+        "我",
+        "你",
+        "他",
+        "谁",
+        "还",
+        "就",
+        "也",
+    ]
+)
+
+
+class _Index:
+    """一次构建、反复查询的索引，持有可用块列表与 BM25 模型"""
+
+    def __init__(
+        self, chunks: list[dict], bm25: BM25Okapi | None, vocab: set[str]
+    ) -> None:
+        # 已剔除下线文档的块，顺序与 bm25 语料顺序严格一致
+        self.chunks = chunks
+        # 语料为空时为 None，调用方要判空
+        self.bm25 = bm25
+        # 语料里出现过的全部词：查覆盖率时先把查询词过滤一遍
+        # 否则「开错、旧、名字」这类语料里根本没有的词会撑大分母，正常提问被误拦
+        self.vocab = vocab
+
+
+# 模块级单例：jieba 加载词典约 0.5 秒，每次查询重建索引会让首个提问慢一秒
+_index: _Index | None = None
+# 并发首访时只允许一个线程建索引，其余等待
+_index_lock = threading.Lock()
+
+
+def _tokenize(text: str) -> list[str]:
+    """切词并丢掉空白与纯标点，统一小写以免 Invoice 与 invoice 被当成两个词"""
+    tokens: list[str] = []
+    for word in jieba.lcut(text):
+        word = word.strip().lower()
+        # 纯标点对 BM25 无意义，留下只会拉低平均分
+        if not word or word in STOPWORDS or not any(ch.isalnum() for ch in word):
+            continue
+        tokens.append(word)
+    return tokens
+
+
+def _load_documents() -> dict[str, dict]:
+    """读文档清单，返回 doc_id → 元数据；清单缺失时降级为空，不让整个检索挂掉"""
+    if not DOCUMENTS_PATH.exists():
+        logger.warning("文档清单不存在，跳过下线过滤 path=%s", DOCUMENTS_PATH)
+        return {}
+    raw = json.loads(DOCUMENTS_PATH.read_text(encoding="utf-8"))
+    return {item["doc_id"]: item for item in raw}
+
+
+def _load_chunks(documents: dict[str, dict]) -> list[dict]:
+    """读块文件并剔除已下线文档的块
+
+    过滤必须发生在建索引阶段：查完再滤会让 top_k 因为被滤掉的条数而凑不满
+    """
+    chunk_list: list[dict] = []
+    skipped = 0
+    with CHUNKS_PATH.open(encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            chunk = json.loads(line)
+            doc = documents.get(chunk["doc_id"])
+            # deleted_at 非空即整篇下线；清单里查不到的块保留，避免清单漏写导致静默丢语料
+            if doc and doc.get("deleted_at"):
+                skipped += 1
+                continue
+            chunk_list.append(chunk)
+    logger.info("块加载完成 可用=%d 剔除=%d", len(chunk_list), skipped)
+    return chunk_list
+
+
+def _build_index() -> _Index:
+    """加载词典、读语料、建 BM25；只在首次调用时执行一次"""
+    # 自定义词典必须先于切词加载，否则「按摩仪」「抬头换开」照样被切成碎词
+    if USERDICT_PATH.exists():
+        jieba.load_userdict(str(USERDICT_PATH))
+    jieba.initialize()
+
+    documents = _load_documents()
+    chunks = _load_chunks(documents)
+    # 标题并入正文一起打分：标题里的政策名是强信号，纯正文可能通篇不重复文档名
+    corpus = [_tokenize(f"{chunk['heading']} {chunk['text']}") for chunk in chunks]
+    bm25 = BM25Okapi(corpus) if corpus else None
+    vocab = {token for tokens_of_chunk in corpus for token in tokens_of_chunk}
+    return _Index(chunks, bm25, vocab)
+
+
+def _get_index() -> _Index:
+    """取单例索引，懒加载；双检锁避免并发首访重复建索引"""
+    global _index
+    if _index is None:
+        with _index_lock:
+            if _index is None:
+                _index = _build_index()
+    return _index
+
+
+def warmup() -> None:
+    """服务启动时调一次，把词典与索引提前建好，避免第一次提问多等半秒"""
+    _get_index()
+
+
+def _to_citation(chunk: dict, ratio: float, query_terms: set[str]) -> dict:
+    """把块转成契约形状的引用项，score 取相对最高分的比例，便于前端直接展示"""
+    text = chunk["text"].replace("\n", " ").strip()
+    # 块首常是 80 字重叠切下来的半句，直接截前 120 字会给用户看断句
+    # 所以以命中词为中心开窗：找不到命中词才退回从块首截
+    pos = -1
+    for term in query_terms:
+        pos = text.find(term)
+        if pos >= 0:
+            break
+    if pos < 0:
+        snippet = text[:SNIPPET_LEN]
+    else:
+        start = max(0, pos - SNIPPET_LEN // 2)
+        end = min(len(text), start + SNIPPET_LEN)
+        head = "…" if start > 0 else ""
+        tail = "…" if end < len(text) else ""
+        snippet = f"{head}{text[start:end]}{tail}"
+    return {
+        "id": chunk["chunk_id"],
+        "documentId": chunk["doc_id"],
+        "knowledgeBaseId": chunk["knowledge_base_id"],
+        "name": chunk["doc_name"],
+        "description": chunk["description"],
+        "snippet": snippet,
+        "page": chunk["page"],
+        "score": round(ratio, 3),
+    }
+
+
+def search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
+    """按 BM25 召回知识块，返回契约形状的引用列表，顺序在全序键上稳定"""
+    index = _get_index()
+    if index.bm25 is None or not query.strip():
+        return []
+
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return []
+
+    # 只保留语料里真实存在的查询词，语料外的词算进分母会把覆盖率压到门槛以下
+    effective_terms = [token for token in query_tokens if token in index.vocab]
+    # 一个有效词都没有，说明问的东西语料里压根没有，直接零命中而不是凑一条最高的
+    if not effective_terms:
+        return []
+
+    query_terms = set(effective_terms)
+    scores = index.bm25.get_scores(query_tokens)
+    # 全序键：分数降序 → 页码升序 → 块 id 升序
+    # 少了后两级，同分块在两次查询里顺序会抖，验收「连问两次顺序一致」就过不了
+    ranked = sorted(
+        zip(index.chunks, scores, strict=False),
+        key=lambda pair: (-pair[1], pair[0]["page"], pair[0]["chunk_id"]),
+    )
+
+    top_score = float(ranked[0][1])
+    # 最高分不为正说明没有任何词命中，直接零命中，不要凑数返回
+    if top_score <= 0:
+        return []
+
+    floor = top_score * RELATIVE_THRESHOLD
+    hits: list[dict] = []
+    for chunk, score in ranked:
+        # ranked 已按分数降序，一旦跌破门槛，后面的只会更低
+        if float(score) < floor:
+            break
+        if (
+            len(query_terms & set(_tokenize(chunk["heading"] + " " + chunk["text"])))
+            / len(query_terms)
+            < MIN_COVERAGE
+        ):
+            continue
+        hits.append(_to_citation(chunk, float(score) / top_score, query_terms))
+        if len(hits) >= top_k:
+            break
+    return hits
+
+
+if __name__ == "__main__":
+    # 手工自测入口：python -m app.retrieval.bm25
+    built = _get_index()
+    print(f"可用块数: {len(built.chunks)}")
+    for probe in [
+        "按摩仪拆封了能退吗",
+        "电子发票抬头开错公司旧名字能改吗",
+        "15 天内可以无理由退货吗",
+        "你们竞品是谁",
+    ]:
+        print(f"\n查询: {probe}")
+        for item in search(probe):
+            print(f"  {item['score']:.3f} p{item['page']} {item['name']} :: {item['snippet'][:40]}")

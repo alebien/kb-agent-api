@@ -8,3 +8,6 @@ __pycache__/
 # 本地环境变量与密钥，禁止提交
 .env
 scripts/learn.py
+
+# 工单库是运行时数据，试一次就变，只保留本机自增
+data/tickets.json

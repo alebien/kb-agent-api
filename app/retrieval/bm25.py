@@ -188,6 +188,26 @@ SINGLE_TERM_CONFIDENCE_CAP = 0.7
 # 检索是概率判断，给用户看「100% 可信」是不诚实，留一线表达不确定性
 CONFIDENCE_CEILING = 0.95
 
+# 数量单位与量词：单独出现时不代表业务实体，命中它等于没命中
+# 「写一篇 1000 字作文」正是靠「字」这种词在发票语料里凑出了覆盖率
+UNIT_WORDS = frozenset("字元天个次页条块人年月日号份张台件")
+# 数词与量词组合：语料里常出现在「一个容器」「一篇说明」这类无关上下文
+NOISE_WORDS = frozenset({"一个", "一篇", "这种", "那种", "一下", "一种"})
+# 单字虚词与方位词：几乎每块都有，留下只会抬覆盖率、不抬贴题度
+FUNCTION_CHARS = frozenset("到内外前后上中里间等和与或也都再还很太更最给被把对从向让使算来去下")
+
+
+def _is_effective_term(term: str) -> bool:
+    """判断查询词算不算「有效实词」
+
+    有效实词表是第四道闸：只有它能进覆盖率的分子分母。语料里存在不等于有意义——
+    纯数字（1000、15、SO 号里的 20261118）、单位量词、单字虚词都能在文档里找到，
+    放进来会让「写一篇 1000 字作文」这种语料外提问凑满覆盖率、落成强引用
+    """
+    if term.isdigit():
+        return False
+    return term not in UNIT_WORDS and term not in NOISE_WORDS and term not in FUNCTION_CHARS
+
 # 句子终止符：开窗起点必须落在这些字符之后，否则会给用户看半句
 SENTENCE_ENDS = "。！？；!?;"
 # 块首若是这些结构标记，说明它本身就是干净起点（标题、列表、表格），不必再挪
@@ -279,8 +299,11 @@ def search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
     if not query_tokens:
         return []
 
-    # 只保留语料里真实存在的查询词，语料外的词算进分母会把覆盖率压到门槛以下
-    effective_terms = [token for token in query_tokens if token in index.vocab]
+    # 只保留语料里真实存在、且本身算实词的查询词
+    # 语料外的词算进分母会把覆盖率压到门槛以下；数字、量词、单字虚词则相反，会把噪音词抬成命中
+    effective_terms = [
+        token for token in query_tokens if token in index.vocab and _is_effective_term(token)
+    ]
     # 一个有效词都没有，说明问的东西语料里压根没有，直接零命中而不是凑一条最高的
     if not effective_terms:
         return []

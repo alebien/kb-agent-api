@@ -190,6 +190,50 @@ SINGLE_TERM_CONFIDENCE_CAP = 0.7
 # 检索是概率判断，给用户看「100% 可信」是不诚实，留一线表达不确定性
 CONFIDENCE_CEILING = 0.95
 
+# 句子终止符：开窗起点必须落在这些字符之后，否则会给用户看半句
+SENTENCE_ENDS = "。！？；!?;"
+# 块首若是这些结构标记，说明它本身就是干净起点（标题、列表、表格），不必再挪
+STRUCTURAL_STARTS = "#-|*"
+
+
+def _find_anchor(text: str, terms: set[str]) -> tuple[int, str]:
+    """挑一个命中词当开窗锚点：最长优先，其次最靠前，最末按字典序
+
+    不能直接迭代 set 取第一个命中的词：字符串哈希按进程随机化，两个进程跑同一条
+    查询可能挑到不同的词，snippet 起点就会抖，卡片 5 的「连问两次一致」直接过不了
+    """
+    anchors = [(text.find(term), term) for term in terms if term and term in text]
+    if not anchors:
+        return -1, ""
+    return min(anchors, key=lambda item: (-len(item[1]), item[0], item[1]))
+
+
+def _snap_start(text: str, raw_start: int) -> int:
+    """把开窗起点右移到最近的句子起点，避开重叠切块留下的半句
+
+    块首那几十字常是上一块的尾巴（如「子发票不可重复开具」），所以 raw_start 为 0
+    也要挪；只有块本身以标题／列表／表格标记开头时，才认定它已是干净起点
+    """
+    if not text:
+        return 0
+    if raw_start <= 0 and text[0] in STRUCTURAL_STARTS:
+        return 0
+    index = max(1, raw_start)
+    while index < len(text):
+        previous = text[index - 1]
+        if previous in SENTENCE_ENDS:
+            break
+        # 段间空行在开窗时已被压成两个空格，同样是句子边界
+        if previous == " " and index >= 2 and text[index - 2] == " ":
+            break
+        index += 1
+    if index >= len(text):
+        # 整块找不到可用边界，退回原起点，至少保住命中词
+        return raw_start if raw_start > 0 else 0
+    while index < len(text) and text[index] == " ":
+        index += 1
+    return index
+
 
 def _to_citation(
     chunk: dict, ratio: float, query_terms: set[str], confidence: float
@@ -201,20 +245,20 @@ def _to_citation(
     """
     text = chunk["text"].replace("\n", " ").strip()
     # 块首常是 80 字重叠切下来的半句，直接截前 120 字会给用户看断句
-    # 所以以命中词为中心开窗：找不到命中词才退回从块首截
-    pos = -1
-    for term in query_terms:
-        pos = text.find(term)
-        if pos >= 0:
-            break
+    # 所以以命中词为中心开窗，起点一律 snap 到句子起点；命中词全无时退化成从首个句子起点截
+    pos, term = _find_anchor(text, query_terms)
     if pos < 0:
-        snippet = text[:SNIPPET_LEN]
-    else:
-        start = max(0, pos - SNIPPET_LEN // 2)
+        start = _snap_start(text, 0)
         end = min(len(text), start + SNIPPET_LEN)
-        head = "…" if start > 0 else ""
-        tail = "…" if end < len(text) else ""
-        snippet = f"{head}{text[start:end]}{tail}"
+    else:
+        start = _snap_start(text, max(0, pos - SNIPPET_LEN // 2))
+        if start > pos:
+            # 句子起点越过了命中词，宁可从句中起也不能让命中词消失
+            start = pos
+        end = min(len(text), max(start + SNIPPET_LEN, pos + len(term)))
+    head = "…" if start > 0 else ""
+    tail = "…" if end < len(text) else ""
+    snippet = f"{head}{text[start:end]}{tail}"
     return {
         "id": chunk["chunk_id"],
         "documentId": chunk["doc_id"],

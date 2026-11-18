@@ -17,6 +17,7 @@ from app.intent import (
     INTENT_THRESHOLD,
     STRONG_CITATION_CONFIDENCE,
     intent_confidence,
+    looks_like_help,
 )
 from app.llm.deepseek import StreamResult, UpstreamError, stream_completion
 from app.retrieval.bm25 import search
@@ -184,11 +185,13 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
                 )
 
             # 分流：低置信度自动转人工。位置与订单一样固定在首个 delta 之前
-            # 无引用时与意图无关——知识库没依据就必须转
-            # 有引用但弱相关时要求意图分过线，避免把闲聊当求助
-            if answer_confidence < AUTO_TICKET_CONFIDENCE and (
-                not citations or intent_score >= INTENT_THRESHOLD
-            ):
+            # 无引用时要求句子本身像求助，挡住「你好」这类寒暄；有引用但弱相关时看意图分
+            if not citations:
+                should_ticket = looks_like_help(prompt)
+            else:
+                should_ticket = intent_score >= INTENT_THRESHOLD
+
+            if answer_confidence < AUTO_TICKET_CONFIDENCE and should_ticket:
                 ticket_tool_id = f"{answer_id}-ticket"
                 ticket_started = time.monotonic()
                 seq += 1

@@ -28,6 +28,27 @@ AUTO_TICKET_CONFIDENCE = 75  # 低于它自动建单转人工；「无引用」�
 REVIEW_CONFIDENCE = 85  # 低于它但不自动建单：75–84 只建议人工复核，建单按钮交用户点
 
 
+# ---- 转人工闸门：光「没有引用」不够，还要看得出用户确实在求助 ----
+QUESTION_WORDS = ("谁", "哪", "怎么", "为什么", "吗", "多久", "是否", "能不能", "多少", "什么")
+MIN_HELP_LENGTH = 4  # 短于它按寒暄处理，挡掉「你好」「在吗」「？」这类不必建单的句子
+
+
+def looks_like_help(prompt: str) -> bool:
+    """判断这句话值不值得转人工：有疑问特征或售后动作词才算求助，纯寒暄不算"""
+    text = prompt.strip()
+    # 太短的先挡：问候语几乎都落在 2-3 字
+    if len(text) < MIN_HELP_LENGTH:
+        return False
+    # 带问号的最直接，中英文都算
+    if "?" in text or "？" in text:
+        return True
+    # 「能退吗」「要投诉」这类动作词本身就是求助信号
+    if any(word in text for word in ACTION_WORDS):
+        return True
+    # 词表兜底：中文常见疑问词，覆盖不带问号的问句
+    return any(word in text for word in QUESTION_WORDS)
+
+
 def intent_confidence(prompt: str) -> float:
     """返回 0–1 的意图置信度：问订单/要建单偏高，闲聊偏低"""
     score = 0.0

@@ -14,6 +14,7 @@ from app.config import DEEPSEEK_MODEL
 from app.llm.deepseek import StreamResult, UpstreamError, stream_completion
 from app.retrieval.bm25 import search
 from app.sse import sse_comment, sse_event
+from app.tools.order import find_order_no, lookup_order
 
 logger = logging.getLogger("knoagent.chat")
 
@@ -122,6 +123,41 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
                 },
                 seq,
             )
+
+            # 订单查询：命中订单号才发，位置固定在检索之后、首个 delta 之前
+            order_no = find_order_no(prompt)
+            if order_no is not None:
+                order_tool_id = f"{answer_id}-order"
+                order_started = time.monotonic()
+                seq += 1
+                yield sse_event(
+                    "tool",
+                    {
+                        "id": order_tool_id,
+                        "name": "get_order",
+                        "status": "running",
+                        "arguments": {"orderNo": order_no},
+                        "startAt": datetime.now(UTC).isoformat(),
+                    },
+                    seq,
+                )
+
+                # 查不到也发 success：工具没查到是正常结果，不是故障
+                order_result = lookup_order(order_no)
+                order_ms = max(0, int((time.monotonic() - order_started) * 1000))
+                seq += 1
+                yield sse_event(
+                    "tool",
+                    {
+                        "id": order_tool_id,
+                        "name": "get_order",
+                        "status": "success",
+                        "arguments": {"orderNo": order_no},
+                        "result": order_result,
+                        "durationMs": order_ms,
+                    },
+                    seq,
+                )
 
             # 断流阈值：-1 表示不中断
             broken_at = -1

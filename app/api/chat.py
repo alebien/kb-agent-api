@@ -11,6 +11,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import DEEPSEEK_MODEL
+from app.intent import (
+    ANSWER_CONFIDENCE,
+    INTENT_THRESHOLD,
+    STRONG_CITATION_CONFIDENCE,
+    intent_confidence,
+)
 from app.llm.deepseek import StreamResult, UpstreamError, stream_completion
 from app.retrieval.bm25 import search
 from app.sse import sse_comment, sse_event
@@ -64,6 +70,8 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
         sent_done = False
         # 承接上游统计：模型名、token 数、片数，生成器结束后才可读
         result = StreamResult()
+        # 意图分与检索无关，先算好：后面订单工具的门槛用它，done 事件也要带出去
+        intent_score = intent_confidence(prompt)
 
         try:
             yield sse_event(
@@ -126,7 +134,7 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
 
             # 订单查询：命中订单号才发，位置固定在检索之后、首个 delta 之前
             order_no = find_order_no(prompt)
-            if order_no is not None:
+            if order_no is not None and intent_score >= INTENT_THRESHOLD:
                 order_tool_id = f"{answer_id}-order"
                 order_started = time.monotonic()
                 seq += 1
@@ -185,10 +193,18 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
             duration_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
             # 先置标记再吐 done：客户端很可能在收到 done 的同一次读取里就断开
             sent_done = True
+            answer_confidence = ANSWER_CONFIDENCE["none"]
+            if citations:
+                answer_confidence = (
+                    ANSWER_CONFIDENCE["strong"]
+                    if citations[0].get("confidence", 0.0) >= STRONG_CITATION_CONFIDENCE
+                    else ANSWER_CONFIDENCE["weak"]
+                )
             yield sse_event(
                 "done",
                 {
-                    "confidence": 88,
+                    "confidence": answer_confidence,
+                    "intentConfidence": intent_score,
                     "model": result.model or DEEPSEEK_MODEL,
                     "durationMs": duration_ms,
                     "tokens": result.completion_tokens,

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from app.config import DEEPSEEK_MODEL
 from app.intent import (
     ANSWER_CONFIDENCE,
+    AUTO_TICKET_CONFIDENCE,
     INTENT_THRESHOLD,
     STRONG_CITATION_CONFIDENCE,
     intent_confidence,
@@ -21,6 +22,7 @@ from app.llm.deepseek import StreamResult, UpstreamError, stream_completion
 from app.retrieval.bm25 import search
 from app.sse import sse_comment, sse_event
 from app.tools.order import find_order_no, lookup_order
+from app.tools.ticket import create_ticket
 
 logger = logging.getLogger("knoagent.chat")
 
@@ -34,6 +36,8 @@ class ChatRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000, description="用户提问")
     # 前端上屏用的临时 id，仅用于日志回显与幂等键，真实后端不依赖它
     answerId: str | None = Field(default=None, max_length=128, description="前端临时消息 id")
+    # 会话 id：工单复用按「会话 + 提问」判重，缺省时退化为全局同问题复用
+    conversationId: str | None = Field(default=None, max_length=128, description="前端会话 id")
 
 
 # 心跳间隔：空闲超过它就补一个注释行，避免网关把长连接当死连接掐掉
@@ -109,9 +113,21 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
             for item in citations:
                 # 块 id 只保证块内唯一，加上 answerId 前缀避免跨请求撞 id
                 chunk_id = item["id"]
-                payload = {key: value for key, value in item.items() if key != "id"}
+                # 引用体去掉块 id，其余字段原样透传；变量名不能用 payload，
+                # 否则会遮住外层的请求体，零命中时取 payload.conversationId 直接报未赋值
+                citation_body = {key: value for key, value in item.items() if key != "id"}
                 seq += 1
-                yield sse_event("citation", {"id": f"{answer_id}-{chunk_id}", **payload}, seq)
+                yield sse_event("citation", {"id": f"{answer_id}-{chunk_id}", **citation_body}, seq)
+
+            # 回答置信度：只看检索结果，先算好——分流要用它，done 事件也要发它
+            # 三选一映射：零引用 62、顶部相关度够 92、其余 78；比的是单条引用 confidence，不是 score
+            answer_confidence = ANSWER_CONFIDENCE["none"]
+            if citations:
+                answer_confidence = (
+                    ANSWER_CONFIDENCE["strong"]
+                    if citations[0].get("confidence", 0.0) >= STRONG_CITATION_CONFIDENCE
+                    else ANSWER_CONFIDENCE["weak"]
+                )
 
             # 工具结束必须与 running 用同一个 id，前端按 id 覆盖同一张卡片
             seq += 1
@@ -167,6 +183,44 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
                     seq,
                 )
 
+            # 分流：低置信度自动转人工。位置与订单一样固定在首个 delta 之前
+            # 无引用时与意图无关——知识库没依据就必须转
+            # 有引用但弱相关时要求意图分过线，避免把闲聊当求助
+            if answer_confidence < AUTO_TICKET_CONFIDENCE and (
+                not citations or intent_score >= INTENT_THRESHOLD
+            ):
+                ticket_tool_id = f"{answer_id}-ticket"
+                ticket_started = time.monotonic()
+                seq += 1
+                yield sse_event(
+                    "tool",
+                    {
+                        "id": ticket_tool_id,
+                        "name": "create_ticket",
+                        "status": "running",
+                        "arguments": {"prompt": prompt, "confidence": answer_confidence},
+                        "startAt": datetime.now(UTC).isoformat(),
+                    },
+                    seq,
+                )
+
+                # 同一会话同一问题复用既有工单，result.reused 会告诉前端是新建还是命中
+                ticket_result = create_ticket(prompt, payload.conversationId)
+                ticket_ms = max(0, int((time.monotonic() - ticket_started) * 1000))
+                seq += 1
+                yield sse_event(
+                    "tool",
+                    {
+                        "id": ticket_tool_id,
+                        "name": "create_ticket",
+                        "status": "success",
+                        "arguments": {"prompt": prompt, "confidence": answer_confidence},
+                        "result": ticket_result,
+                        "durationMs": ticket_ms,
+                    },
+                    seq,
+                )
+
             # 断流阈值：-1 表示不中断
             broken_at = -1
             if broken:
@@ -193,13 +247,6 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
             duration_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
             # 先置标记再吐 done：客户端很可能在收到 done 的同一次读取里就断开
             sent_done = True
-            answer_confidence = ANSWER_CONFIDENCE["none"]
-            if citations:
-                answer_confidence = (
-                    ANSWER_CONFIDENCE["strong"]
-                    if citations[0].get("confidence", 0.0) >= STRONG_CITATION_CONFIDENCE
-                    else ANSWER_CONFIDENCE["weak"]
-                )
             yield sse_event(
                 "done",
                 {

@@ -24,7 +24,7 @@ SNIPPET_LEN = 120
 # 语料只有十几块，BM25 原始分无上界且随查询长度漂移，绝对阈值（如 0.60）调不出来
 RELATIVE_THRESHOLD = 0.4
 # 默认召回条数，与前端契约里的 top_k 对齐
-DEFAULT_TOP_K = 5
+DEFAULT_TOP_K = 3
 MIN_COVERAGE = 0.5
 STOPWORDS = frozenset(
     [
@@ -63,9 +63,7 @@ STOPWORDS = frozenset(
 class _Index:
     """一次构建、反复查询的索引，持有可用块列表与 BM25 模型"""
 
-    def __init__(
-        self, chunks: list[dict], bm25: BM25Okapi | None, vocab: set[str]
-    ) -> None:
+    def __init__(self, chunks: list[dict], bm25: BM25Okapi | None, vocab: set[str]) -> None:
         # 已剔除下线文档的块，顺序与 bm25 语料顺序严格一致
         self.chunks = chunks
         # 语料为空时为 None，调用方要判空
@@ -235,9 +233,7 @@ def _snap_start(text: str, raw_start: int) -> int:
     return index
 
 
-def _to_citation(
-    chunk: dict, ratio: float, query_terms: set[str], confidence: float
-) -> dict:
+def _to_citation(chunk: dict, ratio: float, query_terms: set[str], confidence: float) -> dict:
     """把块转成契约形状的引用项
 
     score 是相对最高分的比例，只用于排序比较，第一名恒为 1.000；

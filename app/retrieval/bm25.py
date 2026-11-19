@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import threading
 from pathlib import Path
 
@@ -20,6 +21,12 @@ USERDICT_PATH = DATA_DIR / "userdict.txt"
 
 # 引用片段长度：前端卡片只展示开头，过长会把布局挤变形
 SNIPPET_LEN = 120
+# 清洗后低于这个长度说明整条基本都是 Markdown 标记，改用未清洗文本兜底，避免给出半句或空串
+MIN_SNIPPET_LEN = 40
+# 一行表格必然带三个以上竖线，超过这条线就认为 snippet 已经走进表格区域
+MAX_TABLE_PIPES = 2
+# 行首标题标记：把「## 六、常见失败原因」清成「六、常见失败原因」
+HEADING_PATTERN = re.compile(r"#{1,6}\s+")
 # 相对门槛：低于最高分这个比例的命中一律丢弃
 # 语料只有十几块，BM25 原始分无上界且随查询长度漂移，绝对阈值（如 0.60）调不出来
 RELATIVE_THRESHOLD = 0.4
@@ -208,6 +215,7 @@ def _is_effective_term(term: str) -> bool:
         return False
     return term not in UNIT_WORDS and term not in NOISE_WORDS and term not in FUNCTION_CHARS
 
+
 # 句子终止符：开窗起点必须落在这些字符之后，否则会给用户看半句
 SENTENCE_ENDS = "。！？；!?;"
 # 块首若是这些结构标记，说明它本身就是干净起点（标题、列表、表格），不必再挪
@@ -253,6 +261,44 @@ def _snap_start(text: str, raw_start: int) -> int:
     return index
 
 
+def _flatten_table(text: str) -> str:
+    """把落在表格里的片段压成一行可读文本
+
+    截断到表格之前只剩半句时不能硬截，可原样返回又会让卡片显示一排竖线，
+    折中办法是把单元格当成并列项：竖线变分隔符，`---` 分隔行与空单元格直接丢掉
+    """
+    cells = [cell.strip() for cell in text.split("|")]
+    kept = [cell for cell in cells if cell and set(cell) != {"-"}]
+    return " · ".join(kept)
+
+
+def _clean_snippet(text: str) -> str:
+    """去掉 snippet 里会当纯文本显示的 Markdown 源标记
+
+    引用卡片把 snippet 直接插进 <p>/<blockquote>，星号、井号、竖线不会被渲染成格式，
+    只会以「**」「##」「| --- |」的样子糊在用户脸上，所以在开窗之后做一次清洗。
+    只清洗展示用的 snippet，块原文与打分排序都不受影响
+    """
+    if not text:
+        return text
+    # 先削掉成对加粗标记，再削行首标题标记；换行在开窗时已压成空格，标题标记退化成「 ## 」形式
+    cleaned = text.replace("**", "")
+    cleaned = HEADING_PATTERN.sub("", cleaned)
+    # 表格区域不算有效信息：竖线超过两个就截断到第一个竖线之前
+    if cleaned.count("|") > MAX_TABLE_PIPES:
+        cut = cleaned.index("|")
+        candidate = cleaned[:cut].rstrip()
+        # 截完还剩够长才认，否则整段都在表格里，改走压平而不是硬截半句
+        if len(candidate) >= MIN_SNIPPET_LEN:
+            cleaned = candidate if candidate.endswith("…") else f"{candidate}…"
+        else:
+            cleaned = _flatten_table(cleaned)
+    # 清洗后掉到很短说明整条基本都是标记，退回未清洗文本的开头，不能返回空串
+    if len(cleaned) < MIN_SNIPPET_LEN:
+        return text[:SNIPPET_LEN]
+    return cleaned
+
+
 def _to_citation(chunk: dict, ratio: float, query_terms: set[str], confidence: float) -> dict:
     """把块转成契约形状的引用项
 
@@ -274,7 +320,8 @@ def _to_citation(chunk: dict, ratio: float, query_terms: set[str], confidence: f
         end = min(len(text), max(start + SNIPPET_LEN, pos + len(term)))
     head = "…" if start > 0 else ""
     tail = "…" if end < len(text) else ""
-    snippet = f"{head}{text[start:end]}{tail}"
+    # 开窗拿到的原文带 Markdown 标记，先清洗再进契约；块原文与检索排序一律不动
+    snippet = _clean_snippet(f"{head}{text[start:end]}{tail}")
     return {
         "id": chunk["chunk_id"],
         "documentId": chunk["doc_id"],

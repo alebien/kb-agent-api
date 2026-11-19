@@ -61,7 +61,8 @@
     "knowledge_base_id": "kb_logistics",
     "description": "物流配送库 · 异常判定与超时赔付",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-11-19T15:02:00+08:00"
   },
   {
     "doc_id": "6c7a17db-8ec6-594f-abe3-bda49b511b65",
@@ -69,7 +70,8 @@
     "knowledge_base_id": "kb_logistics",
     "description": "物流配送库 · 生鲜验货与破损赔付",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-11-19T15:03:00+08:00"
   },
   {
     "doc_id": "7f215ddb-1bb0-5e39-8864-f13412d73acf",
@@ -77,7 +79,8 @@
     "knowledge_base_id": "kb_aftersale",
     "description": "售后政策库 · 运费险与退货运费",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-11-19T15:04:00+08:00"
   },
   {
     "doc_id": "6d170337-d221-5cf7-afb7-a805f6bbfb67",
@@ -85,7 +88,8 @@
     "knowledge_base_id": "kb_aftersale",
     "description": "售后政策库 · 价保与降价补差",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-11-19T15:05:00+08:00"
   },
   {
     "doc_id": "ee5fe762-4b65-5d47-8f49-bf1c30fb8ce2",
@@ -93,7 +97,8 @@
     "knowledge_base_id": "kb_logistics",
     "description": "物流配送库 · 改址与拒收",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-11-19T15:06:00+08:00"
   },
   {
     "doc_id": "a83ff86d-c871-59ab-9e38-e52f3fb58c64",
@@ -101,6 +106,7 @@
     "knowledge_base_id": "kb_invoice",
     "description": "财务票据库 · 专票资质与红字发票",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-11-19T15:07:00+08:00"
   }
 ]

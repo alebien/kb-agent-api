@@ -70,7 +70,14 @@ STOPWORDS = frozenset(
 class _Index:
     """一次构建、反复查询的索引，持有可用块列表与 BM25 模型"""
 
-    def __init__(self, chunks: list[dict], bm25: BM25Okapi | None, vocab: set[str]) -> None:
+    def __init__(
+        self,
+        chunks: list[dict],
+        bm25: BM25Okapi | None,
+        vocab: set[str],
+        chunk_counts: dict[str, int] | None = None,
+        doc_meta: dict[str, dict] | None = None,
+    ) -> None:
         # 已剔除下线文档的块，顺序与 bm25 语料顺序严格一致
         self.chunks = chunks
         # 语料为空时为 None，调用方要判空
@@ -78,6 +85,10 @@ class _Index:
         # 语料里出现过的全部词：查覆盖率时先把查询词过滤一遍
         # 否则「开错、旧、名字」这类语料里根本没有的词会撑大分母，正常提问被误拦
         self.vocab = vocab
+        # 每个文档在本次索引里实际贡献的块数，供引用详情展示「文本块 N 个」
+        self.chunk_counts = chunk_counts or {}
+        # 文档清单的原始元数据，用于取导入时间等展示字段
+        self.doc_meta = doc_meta or {}
 
 
 # 模块级单例：jieba 加载词典约 0.5 秒，每次查询重建索引会让首个提问慢一秒
@@ -154,7 +165,11 @@ def _build_index() -> _Index:
     corpus = [_tokenize(f"{chunk['heading']} {chunk['text']}") for chunk in chunks]
     bm25 = BM25Okapi(corpus) if corpus else None
     vocab = {token for tokens_of_chunk in corpus for token in tokens_of_chunk}
-    return _Index(chunks, bm25, vocab)
+    # 按文档统计块数：用实际进索引的块来数，比清单里写死的数字可信
+    chunk_counts: dict[str, int] = {}
+    for chunk in chunks:
+        chunk_counts[chunk["doc_id"]] = chunk_counts.get(chunk["doc_id"], 0) + 1
+    return _Index(chunks, bm25, vocab, chunk_counts, documents)
 
 
 def _get_index() -> _Index:
@@ -323,7 +338,14 @@ def _clean_snippet(text: str) -> str:
     return cleaned
 
 
-def _to_citation(chunk: dict, ratio: float, query_terms: set[str], confidence: float) -> dict:
+def _to_citation(
+    chunk: dict,
+    ratio: float,
+    query_terms: set[str],
+    confidence: float,
+    chunk_count: int = 0,
+    uploaded_at: str | None = None,
+) -> dict:
     """把块转成契约形状的引用项
 
     score 是相对最高分的比例，只用于排序比较，第一名恒为 1.000；
@@ -355,6 +377,9 @@ def _to_citation(chunk: dict, ratio: float, query_terms: set[str], confidence: f
         "snippet": snippet,
         # 详情抽屉要展示的全文：块原文去标记后的可读版本，卡片只显示 snippet 的前几十字
         "content": _display_text(chunk["text"]),
+        # 该文档的块数与导入时间，供详情抽屉展示元信息；老文档清单里没有导入时间就不传
+        "chunkCount": chunk_count,
+        "uploadedAt": uploaded_at,
         "page": chunk["page"],
         "score": round(ratio, 3),
         # 展示用的可信度，与 score 语义不同：score 是相对排序值，confidence 是贴题程度
@@ -419,6 +444,8 @@ def search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict]:
                     if len(query_terms) == 1
                     else CONFIDENCE_CEILING
                 ),
+                chunk_count=index.chunk_counts.get(chunk["doc_id"], 0),
+                uploaded_at=index.doc_meta.get(chunk["doc_id"], {}).get("uploaded_at"),
             )
         )
         if len(hits) >= top_k:

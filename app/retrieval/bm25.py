@@ -261,6 +261,30 @@ def _snap_start(text: str, raw_start: int) -> int:
     return index
 
 
+def _display_text(text: str) -> str:
+    """把块原文转成详情里可读的全文
+
+    引用抽屉要展示「这块到底写了什么」，直接把 Markdown 原文丢过去会满屏 `##`、`**` 和空行。
+    这里只做最轻的三件事：去掉加粗标记、去掉行首标题井号、把连续空行压成一个，
+    分段与表格原样保留——详情里需要的是结构，不是压缩成一行
+    """
+    if not text:
+        return text
+    cleaned = text.replace("**", "")
+    # 换行在原文里是真的（这里是块原文，不是开窗后压平的 snippet），所以要按行处理标题标记
+    lines = [
+        HEADING_PATTERN.sub("", line) if line.startswith("#") else line
+        for line in cleaned.split("\n")
+    ]
+    collapsed: list[str] = []
+    for line in lines:
+        # 连续空行只留一个，避免详情里出现大片空白
+        if not line.strip() and collapsed and not collapsed[-1].strip():
+            continue
+        collapsed.append(line)
+    return "\n".join(collapsed).strip()
+
+
 def _flatten_table(text: str) -> str:
     """把落在表格里的片段压成一行可读文本
 
@@ -329,6 +353,8 @@ def _to_citation(chunk: dict, ratio: float, query_terms: set[str], confidence: f
         "name": chunk["doc_name"],
         "description": chunk["description"],
         "snippet": snippet,
+        # 详情抽屉要展示的全文：块原文去标记后的可读版本，卡片只显示 snippet 的前几十字
+        "content": _display_text(chunk["text"]),
         "page": chunk["page"],
         "score": round(ratio, 3),
         # 展示用的可信度，与 score 语义不同：score 是相对排序值，confidence 是贴题程度

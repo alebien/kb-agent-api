@@ -54,5 +54,53 @@
     "description": "售后政策库 · 旧版退款政策（已废止）",
     "status": "ready",
     "deleted_at": "2026-11-06T11:20:00+08:00"
+  },
+  {
+    "doc_id": "def1a498-df33-5de2-ae15-dad870411ec5",
+    "name": "物流异常处理规范.md",
+    "knowledge_base_id": "kb_logistics",
+    "description": "物流配送库 · 异常判定与超时赔付",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "6c7a17db-8ec6-594f-abe3-bda49b511b65",
+    "name": "生鲜商品售后与赔付标准.docx",
+    "knowledge_base_id": "kb_logistics",
+    "description": "物流配送库 · 生鲜验货与破损赔付",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "7f215ddb-1bb0-5e39-8864-f13412d73acf",
+    "name": "运费险与退货运费说明.md",
+    "knowledge_base_id": "kb_aftersale",
+    "description": "售后政策库 · 运费险与退货运费",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "6d170337-d221-5cf7-afb7-a805f6bbfb67",
+    "name": "价保与降价补差申请说明.md",
+    "knowledge_base_id": "kb_aftersale",
+    "description": "售后政策库 · 价保与降价补差",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "ee5fe762-4b65-5d47-8f49-bf1c30fb8ce2",
+    "name": "收货地址修改与拒收处理说明.md",
+    "knowledge_base_id": "kb_logistics",
+    "description": "物流配送库 · 改址与拒收",
+    "status": "ready",
+    "deleted_at": null
+  },
+  {
+    "doc_id": "a83ff86d-c871-59ab-9e38-e52f3fb58c64",
+    "name": "增值税专用发票与红字发票说明.docx",
+    "knowledge_base_id": "kb_invoice",
+    "description": "财务票据库 · 专票资质与红字发票",
+    "status": "ready",
+    "deleted_at": null
   }
 ]

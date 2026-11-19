@@ -5,7 +5,8 @@
     "knowledge_base_id": "kb_aftersale",
     "description": "售后政策库 · 退款时效与无理由判定",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-10-20T09:42:00+08:00"
   },
   {
     "doc_id": "4b7d2f58-1c9e-4a63-b840-7e5f9a2c6d13",
@@ -13,7 +14,8 @@
     "knowledge_base_id": "kb_invoice",
     "description": "财务票据库 · 抬头换开与时效",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-10-21T14:05:00+08:00"
   },
   {
     "doc_id": "c3a8e6d2-5f47-4b91-9d08-1a6c3e7f2b95",
@@ -21,7 +23,8 @@
     "knowledge_base_id": "kb_member",
     "description": "会员权益库 · 等级折扣与权益边界",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-10-23T10:26:00+08:00"
   },
   {
     "doc_id": "8b4f7e21-c09d-4a6b-9e35-2d1a5c8b7f60",
@@ -29,7 +32,8 @@
     "knowledge_base_id": "kb_member",
     "description": "会员权益库 · 积分获取与过期",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-10-28T13:47:00+08:00"
   },
   {
     "doc_id": "1f7e3a58-9c2b-4d81-b640-8a5e0f2c9d34",
@@ -37,7 +41,8 @@
     "knowledge_base_id": "kb_invoice",
     "description": "财务票据库 · 作废红冲与退款联动",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-10-30T15:22:00+08:00"
   },
   {
     "doc_id": "6c0d9b47-3e5a-4f28-8a71-b2d4c6e9f013",
@@ -45,7 +50,8 @@
     "knowledge_base_id": "kb_logistics",
     "description": "物流配送库 · 时效与区域覆盖",
     "status": "ready",
-    "deleted_at": null
+    "deleted_at": null,
+    "uploaded_at": "2026-11-01T09:56:00+08:00"
   },
   {
     "doc_id": "b4c1d7e9-2a58-4f63-9b07-8e3d1c5a2f84",
@@ -53,7 +59,8 @@
     "knowledge_base_id": "kb_aftersale",
     "description": "售后政策库 · 旧版退款政策（已废止）",
     "status": "ready",
-    "deleted_at": "2026-11-06T11:20:00+08:00"
+    "deleted_at": "2026-11-06T11:20:00+08:00",
+    "uploaded_at": "2026-10-16T10:05:00+08:00"
   },
   {
     "doc_id": "def1a498-df33-5de2-ae15-dad870411ec5",

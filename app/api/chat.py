@@ -290,8 +290,9 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
 
         except UpstreamError as exc:
             # 上游错误（401、余额不足、超时）属于流内失败，只能发事件，改不了状态码
+            # exc 里可能带上游返回体、请求 id、甚至 key 片段，只进日志，绝不给用户看
             logger.warning("上游失败 answerId=%s 原因=%s", answer_id, exc)
-            yield sse_event("error", {"message": f"模型服务暂不可用：{exc}"}, seq + 1)
+            yield sse_event("error", {"message": "模型服务暂不可用，请稍后重试"}, seq + 1)
 
         except Exception:
             # 兜底：任何未预期异常都要变成 error 事件，否则前端只看到断连、拿不到原因

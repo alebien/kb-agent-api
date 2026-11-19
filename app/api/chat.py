@@ -149,6 +149,10 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
                 seq,
             )
 
+            # 工具分段耗时先置 0：本次没调用该工具就是 0，done 的 breakdown 四段要能相加对上总耗时
+            order_ms = 0
+            ticket_ms = 0
+
             # 订单查询：命中订单号才发，位置固定在检索之后、首个 delta 之前
             order_no = find_order_no(prompt)
             if order_no is not None and intent_score >= INTENT_THRESHOLD:
@@ -248,6 +252,9 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
 
             seq += 1
             duration_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+            # 生成耗时取「总耗时减去其它三段」的余量：模型首字延迟也属于用户等生成的时间，
+            # 只从首个 delta 算起会凭空少掉几百毫秒，四步之和就对不上总耗时（PRD 要求误差 ≤100ms）
+            generation_ms = max(1, duration_ms - retrieval_ms - order_ms - ticket_ms)
             # 先置标记再吐 done：客户端很可能在收到 done 的同一次读取里就断开
             sent_done = True
             yield sse_event(
@@ -258,8 +265,13 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
                     "model": result.model or DEEPSEEK_MODEL,
                     "durationMs": duration_ms,
                     "tokens": result.completion_tokens,
-                    # 质量行四步链路的第二段：检索耗时，D9 前端加「检索」那一行时要读
-                    "breakdown": {"retrievalMs": retrieval_ms},
+                    # 质量行四步链路的分段耗时，四段之和约等于上面的 durationMs
+                    "breakdown": {
+                        "retrievalMs": retrieval_ms,
+                        "orderMs": order_ms,
+                        "ticketMs": ticket_ms,
+                        "generationMs": generation_ms,
+                    },
                 },
                 seq,
             )
